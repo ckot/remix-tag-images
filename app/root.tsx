@@ -1,30 +1,40 @@
+import React from "react";
+import type { LinksFunction } from "@remix-run/node";
+import { redirect } from "@remix-run/node";
+
 import {
   Links,
   Meta,
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
+  useRouteError,
 } from "@remix-run/react";
-import type { LinksFunction } from "@remix-run/node";
 
-import "./tailwind.css";
+import appStylesHref from "./app.css?url";
+
+import { dbController } from "./data";
+
+import Navbar from "./components/Navbar";
 
 export const links: LinksFunction = () => [
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
-  {
-    rel: "preconnect",
-    href: "https://fonts.gstatic.com",
-    crossOrigin: "anonymous",
-  },
-  {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
-  },
+  { rel: "stylesheet", href: appStylesHref, as: "style" },
 ];
+
+export const loader = async () => {
+  const tags = await dbController.getTags();
+  return Response.json({ tags });
+};
+
+export const action = async () => {
+  const tag = await dbController.createTag("");
+  return redirect(`/tags/${tag.id}`);
+};
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className="has-navbar-fixed-top">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -39,7 +49,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
     </html>
   );
 }
-
 export default function App() {
-  return <Outlet />;
+  const { tags } = useLoaderData<typeof loader>();
+
+  return (
+    <>
+      <Navbar tags={tags} />
+      <main id="detail">
+        <Outlet />
+      </main>
+    </>
+  );
+}
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  return (
+    <>
+      <Navbar tags={[]} />
+      <main id="detail">
+        <pre>{typeof error}</pre>
+      </main>
+    </>
+  );
 }
