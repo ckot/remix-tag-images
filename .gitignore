@@ -4,5 +4,9 @@ node_modules
 /build
 .env
 
+// sqlite files
 images.db*
 *.sqlite
+
+// vs-code stuff
+*.code-workspace
