@@ -1,0 +1,25 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+
+model Image {
+  id         Int          @id @default(autoincrement())
+  src        String       @unique(map: "sqlite_autoindex_images_1")
+  alt        String       @default("")
+  width      Int
+  height     Int
+  tags Tag[]
+}
+
+model Tag {
+  id         Int          @id @default(autoincrement())
+  name       String       @unique(map: "sqlite_autoindex_tags_1")
+  images Image[]
+}
+
