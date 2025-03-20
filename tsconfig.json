@@ -13,6 +13,8 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "jsx": "react-jsx",
+    // "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
