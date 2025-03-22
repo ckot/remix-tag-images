@@ -1,129 +1,45 @@
 import { Prisma, PrismaClient} from "@prisma/client";
 import type {Image, Tag} from "@prisma/client"
+
+import type {
+  GetPaginatedImagesParams,
+  GetPaginatedTagsParams,
+  NonEmptyArrayOfPositiveIntegers,
+  // NonEmptyString,
+  PaginatedResult,
+  PositiveInteger
+ } from "./types";
+
 import {
-  PrismaClientKnownRequestError,
-  PrismaClientValidationError,
-} from "@prisma/client/runtime/library";
+  DEFAULT_PAGE_NUMBER,
+  DEFAULT_PAGE_SIZE,
+  DEFAULT_IMAGE_INCLUDES,
+  DEFAULT_IMAGE_ORDER_BY,
+  DEFAULT_IMAGE_SAMPLE_SIZE,
+  DEFAULT_TAG_INCLUDES,
+  DEFAULT_TAG_ORDER_BY,
+} from "./constants";
 
-import { z } from "zod";
+import { schemas } from "./schemas";
 
-// for consuming apps
-export type { Image, Tag } from "@prisma/client";
+import {
+  genTagInclude,
+  handlePrismaError,
+  validatePaginationParams,
+} from "./helpers";
 
-// Define schemas
-const schemas = {
-  nonEmptyString: z.string().nonempty(),
-  positiveInteger: z.number().int().positive(),
-  nonEmptyArrayOfPositiveIntegers: z
-    .array(z.number().int().positive())
-    .nonempty(),
-};
-
-// do I need to export these???
-export type NonEmptyString = z.infer<typeof schemas.nonEmptyString>;
-export type PositiveInteger = z.infer<typeof schemas.positiveInteger>;
-export type NonEmptyArrayOfPositiveIntegers = z.infer<
-  typeof schemas.nonEmptyArrayOfPositiveIntegers
->;
-
-// some constants so that I can keep the default values for pagination
-// parameters in sync between the JSdoc and the implementation
-const DEFAULT_PAGE_NUMBER: PositiveInteger = 1;
-const DEFAULT_PAGE_SIZE: PositiveInteger = 25;
-
-/**
- * Represents a paginated result set.
- *
- * @template T - The type of items in the result set
- *
- * @property {T[]} data - The array of items for the current page
- * @property {number} total - The total number of items across all pages
- * @property {PositiveInteger} page - The current page number (1-based)
- * @property {PositiveInteger} pageSize - The maximum number of items per page
- */
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: PositiveInteger;
-  pageSize: PositiveInteger;
-}
-
-
-interface PaginationParams {
-  pageNum: PositiveInteger;
-  numPerPage: PositiveInteger
-}
-
-interface PaginatedQueryParams {
-  page?: number;
-  pageSize?: number;
-}
-
-interface GetPaginatedTagsParams extends PaginatedQueryParams{
-  whereClause?: Prisma.TagWhereInput;
-  include?: Prisma.TagInclude;
-  orderBy?: Prisma.TagOrderByWithRelationInput;
-}
-
-interface GetPaginatedImagesParams extends PaginatedQueryParams{
-  whereClause?: Prisma.ImageWhereInput;
-  include?: Prisma.ImageInclude;
-  orderBy?: Prisma.ImageOrderByWithRelationInput;
-}
-
-/**
- * Helper function to validate pagination params
- *
- * @param {unknown} page - the requested page number
- * @param {unknown} pageSize - the maximum number of records per page
- * @returns {PaginationParams}
- * @throws {Error} if the parameters fail validation
- */
-function validatePaginationParams(page: PositiveInteger, pageSize: PositiveInteger) : PaginationParams {
-  const pageNum = schemas.positiveInteger.parse(page)
-  const numPerPage = schemas.positiveInteger.parse(pageSize)
-  return {pageNum, numPerPage}
-}
-
-// Helper function to handle Prisma errors
-function handlePrismaError(error: unknown): never {
-  if (error instanceof PrismaClientKnownRequestError) {
-    switch (error.code) {
-      case "P2025":
-        throw new Error(
-          `Record not found: ${error.meta?.cause || "Unknown cause"}`
-        );
-      case "P2016":
-        throw new Error(
-          `Record does not exist: ${error.meta?.target || "Unknown target"}`
-        );
-      case "P2002":
-        throw new Error(
-          `Unique constraint violation: ${
-            error.meta?.target || "Unknown field"
-          }`
-        );
-      default:
-        throw new Error(`Database error: ${error.message}`);
-    }
-  } else if (error instanceof PrismaClientValidationError) {
-    throw new Error(`Validation error: ${error.message}`);
-  } else {
-    throw new Error(
-      `Unexpected error: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
 
 /**
  * Database controller that abstracts away the underlying ORM and database implementation.
  * Provides methods for managing images and tags in the database.
  *
  * @class DBController
+ *
+ * Most applications should use the exported `db` singleton instance (below).
+ * Create your own instance only if you need multiple database connections
+ * or for testing purposes.
  */
-class DBController {
+export class DBController {
   /**
    * Prisma client instance for database operations.
    */
@@ -258,8 +174,8 @@ class DBController {
    *
    * @param {Object} options - uses named parameters
    * @param {Prisma.TagWhereInput} [options.whereClause={}] - the query's where clause
-   * @param {Prisma.TagInclude} [options.include={images : false}] - (optional) - what associated objects to include in results
-   * @param {Prisma.TagOrderByWithRelationInput} [options.orderBy={name: "asc"}] - (optional) results sort order
+   * @param {Prisma.TagInclude} [options.include=DEFAULT_TAG_INCLUDES] - (optional) - what associated objects to include in results
+   * @param {Prisma.TagOrderByWithRelationInput} [options.orderBy=DEFAULT_TAG_ORDER_BY] - (optional) results sort order
    * @param {number} [options.page=DEFAULT_PAGE_NUMBER] - The page number (1-based)
    * @param {number} [options.pageSize=DEFAULT_PAGE_SIZE] - the number of items per page
    *
@@ -270,8 +186,8 @@ class DBController {
    */
   private async getPaginatedTags({
     whereClause = {},
-    include = { images: false },
-    orderBy = { name: "asc" },
+    include = DEFAULT_TAG_INCLUDES,
+    orderBy = DEFAULT_TAG_ORDER_BY,
     page = DEFAULT_PAGE_NUMBER,
     pageSize = DEFAULT_PAGE_SIZE,
   }: GetPaginatedTagsParams = {}) {
@@ -293,10 +209,10 @@ class DBController {
   /**
    * Image model-specific wrapper around getPaginated()
    *
-   * @param {Object} options
-   * @param {Prisma.ImageWhereInput}  options.whereClause - the where clause
-   * @param {Prisma.ImageInclude} [options.include={tags: false}] - (optional) include clause
-   * @param {Prisma.ImageOrderByWithRelationInput} options.orderBy - (optional) orderBy clause
+   * @param {Object} options - uses named params
+   * @param {Prisma.ImageWhereInput} options.whereClause - the where clause
+   * @param {Prisma.ImageInclude} [options.include=DEFAULT_IMAGE_INCLUDES] - (optional) include clause
+   * @param {Prisma.ImageOrderByWithRelationInput} [options.orderBy=DEFAULT_IMAGE_ORDER_BY] - (optional) orderBy clause
    * @param {number} [options.page=DEFAULT_PAGE_NUMBER] - The page number (1 - based)
    * @param {number} [options.pageSize=DEFAULT_PAGE_SIZE] - The number of items per page
    *
@@ -307,8 +223,8 @@ class DBController {
    */
   private async getPaginatedImages({
     whereClause = {},
-    include = { tags: true },
-    orderBy = {},
+    include = DEFAULT_IMAGE_INCLUDES,
+    orderBy = DEFAULT_IMAGE_ORDER_BY,
     page = DEFAULT_PAGE_NUMBER,
     pageSize = DEFAULT_PAGE_SIZE,
   }: GetPaginatedImagesParams = {}): Promise<PaginatedResult<Image>> {
@@ -384,19 +300,26 @@ class DBController {
     }
   }
   /**
-   * Retrieves all tags from the database, sorted alphabetically by name.
+   * Retrieves all tags from the database, sorted alphabetically by name and paginated
    *
-   * @param {PositiveInteger} [page=DEFAULT_PAGE_NUMBER] - the page number of results to retrieve
-   * @param {PositiveInteger} [pageSize=DEFAULT_PAGE_SIZE] - the maximum number of records per page
-   * @returns {Promise<PaginatedResult<Tag>>} Paginated Array of all tags
+   * @param {Object} options
+   * @param {boolean} [options.includeSampleImages=false] - whether or not to include a small set of images representing this tag
+   * @param {boolean} [options.sampleSize=DEFAULT_IMAGE_SAMPLE_SIZE] - how many sample images to provide (ignored if includeSampleImages=false)
+   * @param {PositiveInteger} [options.page=DEFAULT_PAGE_NUMBER] - the page number of results to retrieve
+   * @param {PositiveInteger} [options.pageSize=DEFAULT_PAGE_SIZE] - the maximum number of records per page
+   *
+   * @returns {Promise<PaginatedResult<Tag>>} a promise which resolves to a paginated array of all tags
    */
   async getAllTags({
+    includeSampleImages = false,
+    sampleSize = DEFAULT_IMAGE_SAMPLE_SIZE,
     page = DEFAULT_PAGE_NUMBER,
     pageSize = DEFAULT_PAGE_SIZE,
   }): Promise<PaginatedResult<Tag>> {
     const whereClause: Prisma.TagWhereInput = {};
-    const include: Prisma.TagInclude = { images: false };
-    const orderBy: Prisma.TagOrderByWithRelationInput = { name: "asc" };
+    const include = genTagInclude(includeSampleImages, sampleSize);
+    const orderBy: Prisma.TagOrderByWithRelationInput = DEFAULT_TAG_ORDER_BY;
+
     return await this.getPaginatedTags({
       whereClause,
       include,
@@ -406,9 +329,22 @@ class DBController {
     });
   }
 
+  /**
+   * Retrieves all tags whose name match a substring, sorted by name and paginated
+   *
+   * @param {Object} options - this method uses named parameters
+   * @param {string} [options.substring] - the string to search for with tag names
+   * @param {boolean} [options.includeSampleImages=false] - whether or not to include a small set of images representing this tag
+   * @param {boolean} [options.sampleSize=DEFAULT_IMAGE_SAMPLE_SIZE] - how many sample images to provide (ignored if includeSampleImages=false)
+   * @param {PositiveInteger} [options.page=DEFAULT_PAGE_NUMBER] - the page number of results to retrieve
+   * @param {PositiveInteger} [options.pageSize=DEFAULT_PAGE_SIZE] - the maximum number of records per page
+
+   * @returns {Promise<PaginatedResult<Tag>>} a promise which resolves to a paginated array of all matching tags
+   */
   async searchTags({
     substring = "", // default value will fail validation
-    includeImages = false,
+    includeSampleImages = false,
+    sampleSize = 5,
     page = DEFAULT_PAGE_NUMBER,
     pageSize = DEFAULT_PAGE_SIZE,
   }): Promise<PaginatedResult<Tag>> {
@@ -419,9 +355,7 @@ class DBController {
         contains: validSearchTerm,
       },
     };
-    const include: Prisma.TagInclude = {
-      images: includeImages,
-    };
+    const include = genTagInclude(includeSampleImages, sampleSize);
 
     return await this.getPaginatedTags({
       whereClause,
@@ -436,6 +370,7 @@ class DBController {
    *
    * @param {PositiveInteger} tagID - The ID of the tag to retrieve
    * @param {boolean} [includeImages=false] - Whether to include related images in the result
+   *
    * @returns {Promise<Tag>} The retrieved tag with its images (if includeImages is true)
    * @throws {Error} If the tag is not found or another database error occurs
    */
@@ -460,6 +395,7 @@ class DBController {
    *
    * @param {string} tagName - The name of the tag to retrieve
    * @param {boolean} [includeImages=false] - Whether to include related images in the result
+   *
    * @returns {Promise<Tag>} The retrieved tag with its images (if includeImages is true)
    * @throws {Error} If the tag is not found or another database error occurs
    */
@@ -486,6 +422,7 @@ class DBController {
    *
    * @param {PositiveInteger} [page=DEFAULT_PAGE_NUMBER] - the page number of images to retrieve
    * @param {PositiveInteger} [pageSize=DEFAULT_PAGE_SIZE] - the maximum number of images per page
+   *
    * @returns {Promise<PaginatedResult<Image>>} A paginated Array of untagged images
    * @throws {Error} If a database error occurs
    */
@@ -515,6 +452,7 @@ class DBController {
    * @param {NonEmptyArrayOfPositiveIntegers} tagIDs - the IDs for the tags being searched for
    * @param {PositiveInteger} [page=DEFAULT_PAGE_NUMBER] - the page number
    * @param {PositiveInteger} [pageSize=DEFAULT_PAGE_SIZE] - the max number of images per page
+   *
    * @returns
    */
   async getImagesWithTags(
